@@ -41,27 +41,44 @@ st.markdown(
         color: #000;
     }
 
-    /* Make the table header more colorful */
+    /* Make the table header more colorful and sticky */
     [data-baseweb="data-table"] thead > tr > th {
         background-color: #d7ebfe !important; /* light blue background */
         color: #000000 !important;           /* black text */
         font-weight: bold !important;
         text-align: center !important;
+        position: sticky;
+        top: 0;
+        z-index: 1;
+    }
+
+    /* Make the row numbers sticky */
+    [data-baseweb="data-table"] tbody > tr > td:first-child {
+        position: sticky;
+        left: 0;
+        background-color: #ffffff;
+        z-index: 1;
+        min-width: 50px;
     }
 
     /* MOBILE-FRIENDLY ADJUSTMENTS */
     @media only screen and (max-width: 600px) {
         /* Reduce font size for table */
-        table, th, td, thead, tbody, tr {
-            font-size: 12px;
+        [data-baseweb="data-table"] thead > tr > th,
+        [data-baseweb="data-table"] tbody > tr > td {
+            font-size: 12px !important;
+            padding: 4px !important;
         }
         /* Allow horizontal scroll on small screens */
-        table {
-            display: block;
+        .data-editor-container {
             overflow-x: auto;
-            white-space: nowrap;
         }
-        /* Attempt to make dropdowns not be interfered with the keyboard */
+        /* Ensure the data editor has a fixed height with scroll */
+        .data-editor-fixed-height {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        /* Adjust font size for dropdowns */
         select {
             font-size: 14px; /* slightly larger for mobile tapping */
         }
@@ -347,21 +364,41 @@ def main():
                     )
                     st.dataframe(demo_data)
 
-                # (A) Time Wake Up and Time Go to Bed
+                # (A) Body Weight Input
+                st.write("**กรุณากรอกน้ำหนักตัว (Body Weight, Kg):**")
+                body_weight = st.number_input(
+                    f"[{tab_label}] น้ำหนักตัว (Body Weight, Kg)",
+                    min_value=25.0,
+                    step=0.1,
+                    format="%.1f",
+                    value=70.0  # Set default to 70 kg
+                )
+
+                # (B) Time Wake Up and Time Go to Bed
                 st.write("**กรุณากรอกเวลาตื่นนอน (Time Wake Up) และเวลาที่เข้านอน (Time Go to Bed):**")
                 all_time_slots = generate_time_slots()  # 15-min increments for bedtime/wakeup
+                try:
+                    wake_up_default_index = all_time_slots.index("06:00")
+                except ValueError:
+                    wake_up_default_index = 24  # Fallback to 06:00 if not found
+
+                try:
+                    bed_time_default_index = all_time_slots.index("22:00")
+                except ValueError:
+                    bed_time_default_index = 88  # Fallback to 22:00 if not found
+
                 wake_up_time = st.selectbox(
                     f"[{tab_label}] เวลาตื่นนอน (Time Wake Up)",
                     all_time_slots,
-                    index=6  # default 06:00
+                    index=wake_up_default_index  # default 06:00
                 )
                 bed_time = st.selectbox(
                     f"[{tab_label}] เวลาที่เข้านอน (Time Go to Bed)",
                     all_time_slots,
-                    index=40  # default 22:00
+                    index=bed_time_default_index  # default 22:00
                 )
 
-                # (B) OCR File Uploader
+                # (C) OCR File Uploader
                 uploaded_image = st.file_uploader(
                     f"📤 อัปโหลดภาพตารางข้อมูลสำหรับ {tab_label}",
                     type=["jpg", "png", "jpeg"]
@@ -383,7 +420,7 @@ def main():
                     "Nighttime Void"
                 ]
 
-                # (C) Prepare data for the table
+                # (D) Prepare data for the table
                 with st.form(f"frequency_volume_chart_form_{tab_label}"):
                     if extracted_data is not None:
                         data = extracted_data
@@ -408,7 +445,7 @@ def main():
 
                     st.write(f"**ตารางบันทึกข้อมูล {tab_label}** (Edit data in the table below):")
 
-                    # (D) Setup row numbering as dropdown 1..50
+                    # (E) Setup row numbering as dropdown 1..50
                     data = data.reset_index(drop=True)
                     if 'ลำดับ (No.)' in data.columns:
                         data.drop(columns=['ลำดับ (No.)'], inplace=True)
@@ -428,11 +465,18 @@ def main():
 
                     data.insert(0, "ลำดับ (No.)", existing_numbers)
 
-                    # (E) Create a data_editor with "Leak" as a dropdown, "Activity" as a dropdown, etc.
+                    # (F) Create a data_editor with "Leak" as a dropdown, "Activity" as a dropdown, etc.
+                    st.markdown(
+                        """
+                        <div class="data-editor-container data-editor-fixed-height">
+                        """,
+                        unsafe_allow_html=True
+                    )
                     edited_data = st.data_editor(
                         data,
                         num_rows="dynamic",
                         use_container_width=True,
+                        height=300,  # Fixed height for better mobile usability
                         column_config={
                             "ลำดับ (No.)": st.column_config.SelectboxColumn(
                                 label="ลำดับ (No.)",
@@ -453,6 +497,12 @@ def main():
                                 label="รั่ว (Leak, Y/N)"
                             )
                         }
+                    )
+                    st.markdown(
+                        """
+                        </div>
+                        """,
+                        unsafe_allow_html=True
                     )
 
                     submit_button = st.form_submit_button(f"วิเคราะห์ข้อมูล {tab_label} (Analyze Data)")
@@ -528,7 +578,10 @@ def main():
                         for _, row in calc_data.iterrows():
                             if row["ดื่มน้ำ (Intake, ml)"] > 0:
                                 t_str = row["เวลา (Time)"]
-                                t_mins = parse_time_to_minutes(t_str)
+                                try:
+                                    t_mins = parse_time_to_minutes(t_str)
+                                except:
+                                    continue  # skip invalid times
                                 if cutoff < bed_time_mins:
                                     if cutoff <= t_mins < bed_time_mins:
                                         found_4hr_intake = True
@@ -575,6 +628,58 @@ def main():
                         f"contributed to total void volume on {tab_label}."
                     )
                     plot_dashboard(calc_data)
+
+                    # ----------------------------------------------------------------------------------
+                    # NEW FEATURES START HERE
+                    # ----------------------------------------------------------------------------------
+
+                    # 1. Calculate Proper Urine Output
+                    proper_urine_output = body_weight * 0.5 * 24  # ml/day
+
+                    st.write(f"**ควรปัสสาวะอย่างน้อยต่อวัน (Proper Urine Output):** {proper_urine_output:.2f} ml")
+
+                    # 2. Compare Total Urine Output with Proper Urine Output
+                    if total_output < proper_urine_output:
+                        st.markdown("❓ **สงสัยปริมาณปัสสาวะ น้อยกว่า 0.5ml/kg/hr**")
+
+                    # 3. Check if any interval between voiding times is more than 6 hours
+                    # Convert times to minutes
+                    void_times = calc_data["เวลา (Time)"].tolist()
+                    void_times_mins = []
+                    for time_str in void_times:
+                        if time_str != "None":
+                            try:
+                                mins = parse_time_to_minutes(time_str)
+                                void_times_mins.append(mins)
+                            except:
+                                continue  # skip invalid times
+
+                    if len(void_times_mins) > 1:
+                        # Sort the times
+                        void_times_mins_sorted = sorted(void_times_mins)
+
+                        # Calculate intervals
+                        intervals = []
+                        for i in range(len(void_times_mins_sorted)):
+                            current = void_times_mins_sorted[i]
+                            next_idx = (i + 1) % len(void_times_mins_sorted)
+                            next_time = void_times_mins_sorted[next_idx]
+                            if next_time > current:
+                                interval = next_time - current
+                            else:
+                                interval = (1440 - current) + next_time  # wrap around midnight
+                            intervals.append(interval)
+
+                        # Check if any interval > 360 minutes (6 hours)
+                        has_large_interval = any(interval > 360 for interval in intervals)
+
+                        if has_large_interval:
+                            st.markdown("🆘 **มีการบันทึกการปัสสาวะห่างกันเกิน 6 ชั่วโมง**")
+                    
+
+                    # ----------------------------------------------------------------------------------
+                    # NEW FEATURES END HERE
+                    # ----------------------------------------------------------------------------------
 
     else:
         st.write("สำหรับแพทย์ (Doctor view) - คุณสามารถนำเสนอฟีเจอร์เพิ่มเติมได้ที่นี่ในอนาคต")
