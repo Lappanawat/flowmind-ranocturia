@@ -235,7 +235,7 @@ def main():
       1) Time Wake Up, Time Go to Bed above the main table
       2) These times do not appear in main table
       3) If Nocturnal Polyuria & we find user intake in 4 hrs before bedtime => 
-         "💧มีการทานน้ำในระยะเวลา 4 ชั่วโมงก่อนนอน"
+         "💧มีการดื่มน้ำในช่วงเวลา 4 ชั่วโมงก่อนเข้านอน"
       4) "เวลา (Time)" in the table uses a Selectbox of 15-min intervals from generate_time_slots()
     """
 
