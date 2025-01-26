@@ -1,0 +1,169 @@
+import streamlit as st
+import pandas as pd
+import altair as alt
+from datetime import datetime, timedelta
+from PIL import Image
+import pytesseract
+import re
+
+# ------------------------------------------------------------------------------------------
+# Streamlit Configuration
+# ------------------------------------------------------------------------------------------
+st.set_page_config(
+    page_title="เครื่องมือวิเคราะห์ปริมาณปัสสาวะ",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ------------------------------------------------------------------------------------------
+# Utility Functions
+# ------------------------------------------------------------------------------------------
+
+def generate_time_slots():
+    start_time = datetime.strptime("00:00", "%H:%M")
+    time_slots = [
+        (start_time + timedelta(minutes=15 * i)).strftime("%H:%M") 
+        for i in range(96)
+    ]
+    return time_slots
+
+def normalize_activity(activity_text):
+    ACTIVITY_MAPPING = {
+        "First Morning Void": "ตื่นนอน (First Morning Void)",
+        "Daytime Void": "ปัสสาวะในระหว่างวัน (Daytime Void)",
+        "Bedtime Void": "ปัสสาวะก่อนนอน (Bedtime Void)",
+        "Nighttime Void": "ปัสสาวะกลางคืน (Nighttime Void)"
+    }
+    for key, value in ACTIVITY_MAPPING.items():
+        if key.lower() in activity_text.lower():
+            return value
+    return "Unknown Activity"
+
+def calculate_metrics(
+    total_urine_volume: float, 
+    nocturnal_urine_volume: float, 
+    max_voided_volume: float, 
+    actual_night_urinations: int, 
+    user_age: int
+) -> dict:
+    total_urine_flag = total_urine_volume > 40 * 1000
+    npi = (nocturnal_urine_volume / total_urine_volume) * 100 if total_urine_volume > 0 else 0
+    nocturnal_polyuria_flag = npi > 20 if 40 <= user_age <= 65 else npi > 33
+    diminished_bladder_capacity_flag = max_voided_volume < 200
+    ni = nocturnal_urine_volume / max_voided_volume if max_voided_volume > 0 else 0
+    pnv = ni - 1 if ni > 1 else 0
+    nbci = actual_night_urinations - pnv
+    return {
+        "total_urine_flag": total_urine_flag,
+        "npi": npi,
+        "nocturnal_polyuria_flag": nocturnal_polyuria_flag,
+        "diminished_bladder_capacity_flag": diminished_bladder_capacity_flag,
+        "ni": ni,
+        "pnv": pnv,
+        "nbci": nbci,
+    }
+
+def extract_table_from_image(uploaded_image):
+    image = Image.open(uploaded_image)
+    custom_config = r'--oem 3 --psm 6'
+    extracted_text = pytesseract.image_to_string(
+        image, 
+        lang="tha+eng", 
+        config=custom_config
+    )
+    rows = extracted_text.strip().split("\n")
+    structured_data = []
+    pattern = r"^(.*?)(\d{2}:\d{2})\s+(\d+)\s+(\d+)\s+([YN])$"
+    for row in rows:
+        match = re.match(pattern, row)
+        if match:
+            activity, time_val, intake, output, leak = match.groups()
+            normalized_activity = normalize_activity(activity.strip())
+            structured_data.append([
+                normalized_activity, 
+                time_val.strip(), 
+                int(intake), 
+                int(output), 
+                leak.strip()
+            ])
+        else:
+            structured_data.append(["Unknown Activity", "None", 0, 0, "None"])
+    df = pd.DataFrame(
+        structured_data, 
+        columns=[
+            "กิจกรรม (Activity)", 
+            "เวลา (Time)", 
+            "ดื่มน้ำ (Intake, ml)", 
+            "ปัสสาวะ (Output, ml)", 
+            "รั่ว (Leak, Y/N)"
+        ]
+    )
+    return df
+
+def plot_dashboard(df: pd.DataFrame):
+    grouped_data = df.groupby("กิจกรรม (Activity)")["ปัสสาวะ (Output, ml)"].sum().reset_index()
+    chart = (
+        alt.Chart(grouped_data)
+        .mark_arc()
+        .encode(
+            theta=alt.Theta(field="ปัสสาวะ (Output, ml)", type="quantitative"),
+            color=alt.Color(field="กิจกรรม (Activity)", type="nominal"),
+            tooltip=["กิจกรรม (Activity)", "ปัสสาวะ (Output, ml)"]
+        )
+        .properties(width=400, height=400, title="Voiding Volume by Activity")
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+# ------------------------------------------------------------------------------------------
+# Main App Function
+# ------------------------------------------------------------------------------------------
+def main():
+    st.title("🚰 เครื่องมือวิเคราะห์ปริมาณปัสสาวะ")
+    st.sidebar.header("📋 ข้อมูลผู้ป่วย (Patient Information)")
+    user_age = st.sidebar.number_input("อายุผู้ใช้งาน (User Age)", min_value=0, step=1)
+    uploaded_image = st.file_uploader("อัปโหลดภาพตารางข้อมูล (Upload table image)", type=["jpg", "png", "jpeg"])
+    extracted_data = None
+    if uploaded_image:
+        try:
+            extracted_data = extract_table_from_image(uploaded_image)
+            st.dataframe(extracted_data)
+        except Exception as e:
+            st.error(f"⚠️ ไม่สามารถประมวลผลภาพได้: {e}")
+    time_slots = generate_time_slots()
+    activity_options = [
+        "ตื่นนอน (First Morning Void)",
+        "ปัสสาวะในระหว่างวัน (Daytime Void)",
+        "ปัสสาวะก่อนนอน (Bedtime Void)",
+        "ปัสสาวะกลางคืน (Nighttime Void)"
+    ]
+    with st.form("frequency_volume_chart_form"):
+        data = extracted_data if extracted_data is not None else pd.DataFrame(
+            columns=["กิจกรรม (Activity)", "เวลา (Time)", "ดื่มน้ำ (Intake, ml)", "ปัสสาวะ (Output, ml)", "รั่ว (Leak, Y/N)"],
+            data=[
+                [activity_options[0], time_slots[0], 0, 150, "N"],
+                [activity_options[1], time_slots[1], 250, 200, "N"]
+            ]
+        )
+        edited_data = st.data_editor(data)
+        submit_button = st.form_submit_button("วิเคราะห์ข้อมูล (Analyze Data)")
+    if submit_button:
+        total_intake = edited_data["ดื่มน้ำ (Intake, ml)"].sum()
+        total_output = edited_data["ปัสสาวะ (Output, ml)"].sum()
+        nocturnal_output = edited_data[edited_data["กิจกรรม (Activity)"] == "ปัสสาวะกลางคืน (Nighttime Void)"]["ปัสสาวะ (Output, ml)"].sum()
+        first_morning_void = edited_data[edited_data["กิจกรรม (Activity)"] == "ตื่นนอน (First Morning Void)"]["ปัสสาวะ (Output, ml)"].sum()
+        nocturnal_output += first_morning_void
+        max_voided_volume = edited_data["ปัสสาวะ (Output, ml)"].max()
+        nocturnal_urinations = len(edited_data[edited_data["กิจกรรม (Activity)"] == "ปัสสาวะกลางคืน (Nighttime Void)"])
+        metrics = calculate_metrics(
+            total_urine_volume=total_output, 
+            nocturnal_urine_volume=nocturnal_output, 
+            max_voided_volume=max_voided_volume, 
+            actual_night_urinations=nocturnal_urinations, 
+            user_age=user_age
+        )
+        st.write(f"**Total Intake:** {total_intake} ml")
+        st.write(f"**Nocturnal Polyuria Index:** {metrics['npi']:.2f}")
+        plot_dashboard(edited_data)
+
+if __name__ == "__main__":
+    main()
