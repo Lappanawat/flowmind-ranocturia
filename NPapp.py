@@ -14,7 +14,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# ---------------------- (A) GLOBAL STYLING FOR 3D TABS & TABLE HEADERS --------------------
+# ------------- (A) GLOBAL STYLING FOR 3D TABS & TABLE HEADERS + MOBILE-FRIENDLY CSS --------
 st.markdown(
     """
     <style>
@@ -48,6 +48,24 @@ st.markdown(
         font-weight: bold !important;
         text-align: center !important;
     }
+
+    /* MOBILE-FRIENDLY ADJUSTMENTS */
+    @media only screen and (max-width: 600px) {
+        /* Reduce font size for table */
+        table, th, td, thead, tbody, tr {
+            font-size: 12px;
+        }
+        /* Allow horizontal scroll on small screens */
+        table {
+            display: block;
+            overflow-x: auto;
+            white-space: nowrap;
+        }
+        /* Attempt to make dropdowns not be interfered with the keyboard */
+        select {
+            font-size: 14px; /* slightly larger for mobile tapping */
+        }
+    }
     </style>
     """,
     unsafe_allow_html=True
@@ -63,7 +81,7 @@ def generate_time_slots():
     """
     start_time = datetime.strptime("00:00", "%H:%M")
     return [
-        (start_time + timedelta(minutes=15 * i)).strftime("%H:%M") 
+        (start_time + timedelta(minutes=15 * i)).strftime("%H:%M")
         for i in range(96)
     ]
 
@@ -109,6 +127,7 @@ def calculate_metrics(
     else:
         npi = 0
 
+    # Age-based threshold for NPI
     if 40 <= user_age <= 65:
         nocturnal_polyuria_flag = (npi > 20)
     else:
@@ -151,6 +170,7 @@ def extract_table_from_image(uploaded_image):
 
     rows = extracted_text.strip().split("\n")
     structured_data = []
+    # Attempt to match lines like: "Daytime Void 08:00 250 200 Y"
     pattern = r"^(.*?)(\d{2}:\d{2})\s+(\d+)\s+(\d+)\s+([YN])$"
 
     for row in rows:
@@ -166,6 +186,7 @@ def extract_table_from_image(uploaded_image):
                 leak.strip()
             ])
         else:
+            # If it doesn't match, place a placeholder row
             structured_data.append([
                 "Unknown Activity",
                 "None",
@@ -200,6 +221,7 @@ def plot_dashboard(df: pd.DataFrame):
         "Nighttime Void": "ปัสสาวะกลางคืน (Nighttime Void)"
     }
     df_for_chart = df.copy()
+    # Safely handle any rows that lack the activity column or have "Unknown Activity"
     df_for_chart["กิจกรรม (Activity)"] = df_for_chart["กิจกรรม (Activity)"].apply(
         lambda x: LEGEND_MAPPING.get(x, "Unknown Activity")
     )
@@ -231,12 +253,12 @@ def plot_dashboard(df: pd.DataFrame):
 # ------------------------------------------------------------------------------------------
 def main():
     """
-    Updated code:
-      1) Time Wake Up, Time Go to Bed above the main table
-      2) These times do not appear in main table
-      3) If Nocturnal Polyuria & we find user intake in 4 hrs before bedtime => 
-         "💧มีการดื่มน้ำในช่วงเวลา 4 ชั่วโมงก่อนเข้านอน"
-      4) "เวลา (Time)" in the table uses a Selectbox of 15-min intervals from generate_time_slots()
+    Updated code with 4 changes:
+
+    1) "รั่ว (Leak, Y/N)" is now a dropdown with ["Y", "N"].
+    2) Calculate and display sum of rows where "Leak = Y" as "ปัสสาวะเล็ด จำนวน X ครั้ง" near the chart.
+    3) Mobile-friendly enhancements (scrollable table, smaller fonts, easy dropdown).
+    4) Preserved all existing logic for polyuria checks, charting, etc.
     """
 
     # Branding
@@ -266,7 +288,8 @@ def main():
 
     st.header("Frequency Volume Chart Analysis Tool")
     st.write(
-        "ใช้เครื่องมือนี้เพื่อวิเคราะห์ปริมาณปัสสาวะใน 24 ชั่วโมง, Nocturnal Polyuria, และความจุของกระเพาะปัสสาวะ\n\n"
+        "ใช้เครื่องมือนี้เพื่อวิเคราะห์ปริมาณปัสสาวะใน 24 ชั่วโมง, Nocturnal Polyuria, "
+        "และความจุของกระเพาะปัสสาวะ\n\n"
         "This tool helps analyze 24-hour polyuria, nocturnal polyuria, and bladder capacity."
     )
 
@@ -324,7 +347,7 @@ def main():
                     )
                     st.dataframe(demo_data)
 
-                # 1) New inputs: Time Wake Up, Time Go to Bed
+                # (A) Time Wake Up and Time Go to Bed
                 st.write("**กรุณากรอกเวลาตื่นนอน (Time Wake Up) และเวลาที่เข้านอน (Time Go to Bed):**")
                 all_time_slots = generate_time_slots()  # 15-min increments for bedtime/wakeup
                 wake_up_time = st.selectbox(
@@ -338,7 +361,7 @@ def main():
                     index=40  # default 22:00
                 )
 
-                # OCR File Uploader
+                # (B) OCR File Uploader
                 uploaded_image = st.file_uploader(
                     f"📤 อัปโหลดภาพตารางข้อมูลสำหรับ {tab_label}",
                     type=["jpg", "png", "jpeg"]
@@ -360,6 +383,7 @@ def main():
                     "Nighttime Void"
                 ]
 
+                # (C) Prepare data for the table
                 with st.form(f"frequency_volume_chart_form_{tab_label}"):
                     if extracted_data is not None:
                         data = extracted_data
@@ -383,55 +407,92 @@ def main():
                         )
 
                     st.write(f"**ตารางบันทึกข้อมูล {tab_label}** (Edit data in the table below):")
+
+                    # (D) Setup row numbering as dropdown 1..50
+                    data = data.reset_index(drop=True)
+                    if 'ลำดับ (No.)' in data.columns:
+                        data.drop(columns=['ลำดับ (No.)'], inplace=True)
+
+                    existing_numbers = [None] * len(data)
+                    valid_assigned = []
+                    max_num = 0  # track highest row number used so far
+
+                    # Fill each row with next available integer 1..50 if None
+                    for i in range(len(data)):
+                        if existing_numbers[i] is None:
+                            if max_num < 50:
+                                max_num += 1
+                                existing_numbers[i] = max_num
+                            else:
+                                existing_numbers[i] = 50
+
+                    data.insert(0, "ลำดับ (No.)", existing_numbers)
+
+                    # (E) Create a data_editor with "Leak" as a dropdown, "Activity" as a dropdown, etc.
                     edited_data = st.data_editor(
                         data,
                         num_rows="dynamic",
+                        use_container_width=True,
                         column_config={
+                            "ลำดับ (No.)": st.column_config.SelectboxColumn(
+                                label="ลำดับ (No.)",
+                                options=list(range(1,51))
+                            ),
                             "กิจกรรม (Activity)": st.column_config.SelectboxColumn(
                                 options=activity_options,
                                 label="กิจกรรม (Activity)"
                             ),
-                            # 4) Now "เวลา (Time)" uses a 15-min increment selectbox
+                            # Force 15-min increments in time
                             "เวลา (Time)": st.column_config.SelectboxColumn(
                                 options=full_time_slots,
                                 label="เวลา (Time)"
+                            ),
+                            # (1) NEW: leak column as dropdown with Y/N
+                            "รั่ว (Leak, Y/N)": st.column_config.SelectboxColumn(
+                                options=["Y","N"],
+                                label="รั่ว (Leak, Y/N)"
                             )
                         }
                     )
-                    
+
                     submit_button = st.form_submit_button(f"วิเคราะห์ข้อมูล {tab_label} (Analyze Data)")
 
                 # -------------------- AFTER CLICK ANALYZE -----------------------
                 if submit_button:
                     st.subheader(f"📊 ผลลัพธ์ {tab_label} (Results)")
-                    total_intake = edited_data["ดื่มน้ำ (Intake, ml)"].sum()
-                    total_output = edited_data["ปัสสาวะ (Output, ml)"].sum()
+
+                    # Remove row-number column from final calc
+                    calc_data = edited_data.drop(columns=["ลำดับ (No.)"], errors="ignore")
+
+                    total_intake = calc_data["ดื่มน้ำ (Intake, ml)"].sum()
+                    total_output = calc_data["ปัสสาวะ (Output, ml)"].sum()
 
                     # Combine nighttime + first morning void
-                    nocturnal_output = edited_data[
-                        edited_data["กิจกรรม (Activity)"] == "Nighttime Void"
+                    nocturnal_output = calc_data[
+                        calc_data["กิจกรรม (Activity)"] == "Nighttime Void"
                     ]["ปัสสาวะ (Output, ml)"].sum()
-                    first_morning_void = edited_data[
-                        edited_data["กิจกรรม (Activity)"] == "First Morning Void"
+                    first_morning_void = calc_data[
+                        calc_data["กิจกรรม (Activity)"] == "First Morning Void"
                     ]["ปัสสาวะ (Output, ml)"].sum()
                     nocturnal_output += first_morning_void
 
-                    max_voided_volume = edited_data["ปัสสาวะ (Output, ml)"].max()
+                    max_voided_volume = calc_data["ปัสสาวะ (Output, ml)"].max()
                     nocturnal_urinations = len(
-                        edited_data[
-                            edited_data["กิจกรรม (Activity)"] == "Nighttime Void"
+                        calc_data[
+                            calc_data["กิจกรรม (Activity)"] == "Nighttime Void"
                         ]
                     )
 
-                    # Calculate metrics
+                    # (2) Calculate metrics
                     metrics = calculate_metrics(
-                        total_urine_volume=total_output, 
-                        nocturnal_urine_volume=nocturnal_output, 
-                        max_voided_volume=max_voided_volume, 
-                        actual_night_urinations=nocturnal_urinations, 
+                        total_urine_volume=total_output,
+                        nocturnal_urine_volume=nocturnal_output,
+                        max_voided_volume=max_voided_volume,
+                        actual_night_urinations=nocturnal_urinations,
                         user_age=user_age
                     )
 
+                    # Display results
                     st.write(f"**ปริมาณของเหลวที่ดื่มทั้งหมด (Total Fluid Intake):** {total_intake} ml")
                     st.write(f"**ปริมาณปัสสาวะทั้งหมด (Total Urine Volume):** {total_output} ml")
                     st.write(f"**ปริมาณปัสสาวะกลางคืน (Nocturnal Urine Volume):** {nocturnal_output} ml")
@@ -443,7 +504,6 @@ def main():
                     st.write(f"**ดัชนีความจุของกระเพาะปัสสาวะตอนกลางคืน (NBCI):** {metrics['nbci']:.2f}")
 
                     # Interpretations
-                    # 24-hour polyuria check
                     if metrics["total_urine_flag"]:
                         st.warning(
                             "⚠️ ตรวจพบ 24-Hour Polyuria: ปริมาณปัสสาวะทั้งหมดเกิน 40 ml/kg "
@@ -452,32 +512,28 @@ def main():
                     else:
                         st.success("✅ ไม่พบ 24-Hour Polyuria (No 24-Hour Polyuria Detected).")
 
-                    # Nocturnal polyuria check
                     if metrics["nocturnal_polyuria_flag"]:
                         st.warning("⚠️ ตรวจพบ Nocturnal Polyuria.")
                     else:
                         st.success("✅ ไม่พบ Nocturnal Polyuria.")
 
-                    # ---------- Check if there's intake in 4 hrs before bedtime ----------
+                    # Check if there's intake in 4 hrs before bedtime
                     if metrics["nocturnal_polyuria_flag"]:
                         bed_time_mins = parse_time_to_minutes(bed_time)
                         cutoff = bed_time_mins - 240  # 4 hours => 240 minutes
                         if cutoff < 0:
-                            # wrap around
                             cutoff += 1440
 
                         found_4hr_intake = False
-                        for _, row in edited_data.iterrows():
+                        for _, row in calc_data.iterrows():
                             if row["ดื่มน้ำ (Intake, ml)"] > 0:
                                 t_str = row["เวลา (Time)"]
                                 t_mins = parse_time_to_minutes(t_str)
                                 if cutoff < bed_time_mins:
-                                    # normal scenario
                                     if cutoff <= t_mins < bed_time_mins:
                                         found_4hr_intake = True
                                         break
                                 else:
-                                    # wrap scenario
                                     if t_mins >= cutoff or t_mins < bed_time_mins:
                                         found_4hr_intake = True
                                         break
@@ -506,12 +562,19 @@ def main():
                             "✅ ความจุกระเพาะปัสสาวะปกติ (No Diminished Bladder Capacity Detected)."
                         )
 
+                    # (2) Sum the number of rows that have "Leak = Y"
+                    num_leaks = calc_data[calc_data["รั่ว (Leak, Y/N)"] == "Y"].shape[0]
+
                     st.markdown(f"#### {tab_label} Dashboard Visualization (3D Pie)")
+
+                    # Show "ปัสสาวะเล็ด" count above or near the chart
+                    st.write(f"**ปัสสาวะเล็ด จำนวน {num_leaks} ครั้ง**")
+
                     st.write(
                         "Below is a 3D-like donut chart illustrating how each activity category "
                         f"contributed to total void volume on {tab_label}."
                     )
-                    plot_dashboard(edited_data)
+                    plot_dashboard(calc_data)
 
     else:
         st.write("สำหรับแพทย์ (Doctor view) - คุณสามารถนำเสนอฟีเจอร์เพิ่มเติมได้ที่นี่ในอนาคต")
@@ -522,7 +585,6 @@ def main():
         "(Developed for elderly users with simple inputs and real-time results)."
     )
     st.write("👨‍💻 พัฒนาโดย: **FLOWMIND-RA**")
-
 
 # ------------------------------------------------------------------------------------------
 # 4. Run the Application
